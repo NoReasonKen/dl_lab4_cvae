@@ -10,6 +10,8 @@ from torch.autograd import Variable as V
 from torchvision import datasets, transforms
 from torchvision.utils import save_image
 
+import matplotlib.pyplot as plt
+
 from utils import progress_bar
 #===================================================================
 MNIST_PATH="./data"
@@ -80,6 +82,46 @@ class CVAE(nn.Module):
         
 
 #====================================================================
+def to_img(x):
+    x = x.data.numpy()
+    x = 0.5 * (x + 1)
+    x = np.clip(x, 0, 1)
+    x = x.reshape([-1, 28, 28])
+    return x
+
+def plot_reconstructions(model, save=True, name=None):
+    """
+    Plot 10 reconstructions from the test set. The top row is the original
+    digits, the bottom is the decoder reconstruction.
+    """
+    # encode then decode
+    data, label = next(iter(test_loader))
+    data, label = V(data.cuda()), V(label.cuda())
+    model(data, label)
+
+    true_imgs = to_img(true_imgs)
+    decoded_imgs = to_img(decoded_imgs)
+    
+    n = 10
+    plt.figure(figsize=(20, 4))
+    for i in range(n):
+        # display original
+        ax = plt.subplot(2, n, i + 1)
+        plt.imshow(true_imgs[i])
+        plt.gray()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+
+        # display reconstruction
+        ax = plt.subplot(2, n, i + 1 + n)
+        plt.imshow(decoded_imgs[i])
+        plt.gray()
+        ax.get_xaxis().set_visible(False)
+        ax.get_yaxis().set_visible(False)
+    if save:
+        plt.savefig('./plots/' + name + '.png', format='png', dpi=300)
+    plt.show()
+#====================================================================
 train_loader = torch.utils.data.DataLoader(
         datasets.MNIST(MNIST_PATH, train=True, download=MNIST_DOWNLOAD
                     , transform=transforms.ToTensor()),
@@ -89,22 +131,24 @@ train_loader = torch.utils.data.DataLoader(
 test_loader = torch.utils.data.DataLoader(
         datasets.MNIST(MNIST_PATH, train=False, download=MNIST_DOWNLOAD
                     , transform=transforms.ToTensor()),
-        batch_size=1000,
+        batch_size=100,
         shuffle=True, num_workers=4, 
         )
 
 cudnn.benchmark = True
 model = CVAE().cuda()
-optimizer = optim.Adam(model.parameters(), lr=LR)
+lr = LR
+optimizer = optim.Adam(model.parameters(), lr=lr)
 
 def criterion(output, data, u, logv):
     MSE = F.mse_loss(output, data, size_average=False)
     KLD = -0.5 * torch.sum(1 + logv - u.pow(2) - logv.exp())
     return MSE + KLD
 
-def train(epoch):
+def train(epoch, loss, loss_log):
     print("Epoch: ", epoch)
     model.train()
+    loss_log = loss
     loss = 0
     
     for idx, (data, label) in enumerate(train_loader):
@@ -119,7 +163,23 @@ def train(epoch):
         loss += delta.data[0]
 
         progress_bar(idx, len(train_loader), 'Loss: %.3f' % (loss/(idx+1)))
+    return loss, loss_log
 
+loss = 1e10
+loss_log = 0
 for epoch in range(EPOCH):
-    train(epoch)
-
+    loss, loss_log = train(epoch, loss, loss_log)
+    if (epoch + 1) % 5 == 0:
+        noise = V(torch.randn(10, 1, 20).cuda())
+        cond = V(torch.arange(10).random_(0, 9).cuda())
+        sample = model.decoder(noise, cond).cpu()
+        cond_str = ''
+        for i in cond.data:
+            cond_str += str(i)
+        save_image(sample.data,
+                    'results/' + str(int(epoch)) + '_' + cond_str + '.jpg')
+    
+    if loss_log - loss < 5:
+        lr *= 0.9
+        print(lr)
+        optimizer = optim.Adam(model.parameters(), lr=lr)
