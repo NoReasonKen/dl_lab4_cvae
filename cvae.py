@@ -145,10 +145,9 @@ def criterion(output, data, u, logv):
     KLD = -0.5 * torch.sum(1 + logv - u.pow(2) - logv.exp())
     return MSE + KLD
 
-def train(epoch, loss, loss_log):
+def train(epoch):
     print("Epoch: ", epoch)
     model.train()
-    loss_log = loss
     loss = 0
     
     for idx, (data, label) in enumerate(train_loader):
@@ -163,12 +162,13 @@ def train(epoch, loss, loss_log):
         loss += delta.data[0]
 
         progress_bar(idx, len(train_loader), 'Loss: %.3f' % (loss/(idx+1)))
-    return loss, loss_log
+    return loss
 
-loss = 1e10
-loss_log = 0
+thredhold = 5
+loss = 0
+loss_log = 1e10
 for epoch in range(EPOCH):
-    loss, loss_log = train(epoch, loss, loss_log)
+    loss = train(epoch)
     if (epoch + 1) % 5 == 0:
         noise = V(torch.randn(10, 1, 20).cuda())
         cond = V(torch.arange(10).random_(0, 9).cuda())
@@ -179,7 +179,10 @@ for epoch in range(EPOCH):
         save_image(sample.data,
                     'results/' + str(int(epoch)) + '_' + cond_str + '.jpg')
     
-    if loss_log - loss < 5:
+    if (loss_log - loss) / 469 < thredhold:
         lr *= 0.9
-        print(lr)
+        thredhold *= 0.95
+        print(lr, thredhold)
         optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    loss_log = loss
