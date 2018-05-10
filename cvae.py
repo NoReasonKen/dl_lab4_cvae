@@ -22,6 +22,8 @@ EPOCH=100
 LR=1e-3
 NOISE_SIZE=20
 CONDITION_CODE_SIZE=10
+
+MODE="load"
 #====================================================================
 class CVAE(nn.Module):
     def __init__(self):
@@ -82,64 +84,6 @@ class CVAE(nn.Module):
         
 
 #====================================================================
-def to_img(x):
-    x = x.data.numpy()
-    x = 0.5 * (x + 1)
-    x = np.clip(x, 0, 1)
-    x = x.reshape([-1, 28, 28])
-    return x
-
-def plot_reconstructions(model, save=True, name=None):
-    """
-    Plot 10 reconstructions from the test set. The top row is the original
-    digits, the bottom is the decoder reconstruction.
-    """
-    # encode then decode
-    data, label = next(iter(test_loader))
-    data, label = V(data.cuda()), V(label.cuda())
-    model(data, label)
-
-    true_imgs = to_img(true_imgs)
-    decoded_imgs = to_img(decoded_imgs)
-    
-    n = 10
-    plt.figure(figsize=(20, 4))
-    for i in range(n):
-        # display original
-        ax = plt.subplot(2, n, i + 1)
-        plt.imshow(true_imgs[i])
-        plt.gray()
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-
-        # display reconstruction
-        ax = plt.subplot(2, n, i + 1 + n)
-        plt.imshow(decoded_imgs[i])
-        plt.gray()
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-    if save:
-        plt.savefig('./plots/' + name + '.png', format='png', dpi=300)
-    plt.show()
-#====================================================================
-train_loader = torch.utils.data.DataLoader(
-        datasets.MNIST(MNIST_PATH, train=True, download=MNIST_DOWNLOAD
-                    , transform=transforms.ToTensor()),
-        batch_size=TRAIN_DATA_BATCH_SIZE,
-        shuffle=True, num_workers=4, 
-        )
-test_loader = torch.utils.data.DataLoader(
-        datasets.MNIST(MNIST_PATH, train=False, download=MNIST_DOWNLOAD
-                    , transform=transforms.ToTensor()),
-        batch_size=100,
-        shuffle=True, num_workers=4, 
-        )
-
-cudnn.benchmark = True
-model = CVAE().cuda()
-lr = LR
-optimizer = optim.Adam(model.parameters(), lr=lr)
-
 def criterion(output, data, u, logv):
     MSE = F.mse_loss(output, data, size_average=False)
     KLD = -0.5 * torch.sum(1 + logv - u.pow(2) - logv.exp())
@@ -164,25 +108,59 @@ def train(epoch):
         progress_bar(idx, len(train_loader), 'Loss: %.3f' % (loss/(idx+1)))
     return loss
 
-thredhold = 5
-loss = 0
-loss_log = 1e10
-for epoch in range(EPOCH):
-    loss = train(epoch)
-    if (epoch + 1) % 5 == 0:
-        noise = V(torch.randn(10, 1, 20).cuda())
-        cond = V(torch.arange(10).random_(0, 9).cuda())
-        sample = model.decoder(noise, cond).cpu()
-        cond_str = ''
-        for i in cond.data:
-            cond_str += str(i)
-        save_image(sample.data,
-                    'results/' + str(int(epoch)) + '_' + cond_str + '.jpg')
-    
-    if (loss_log - loss) / 469 < thredhold:
-        lr *= 0.9
-        thredhold *= 0.95
-        print(lr, thredhold)
-        optimizer = optim.Adam(model.parameters(), lr=lr)
+def save_model():
+    model = CVAE().cuda()
+    lr = LR
+    optimizer = optim.Adam(model.parameters(), lr=lr)
 
-    loss_log = loss
+    thredhold = 5
+    loss = 0
+    loss_log = 1e10
+    for epoch in range(EPOCH):
+        loss = train(epoch)
+        
+        if (loss_log - loss) / 469 < thredhold:
+            lr *= 0.9
+            thredhold *= 0.99
+            print(lr, thredhold)
+            optimizer = optim.Adam(model.parameters(), lr=lr)
+
+        loss_log = loss
+
+    torch.save(model, 'model.pkl')
+
+def load_model():
+    model = torch.load('model.pkl').cuda()
+
+    noise = torch.randn(1, 1, 20).expand(10, 1, 20)
+    for i in range(9):
+        tmp = torch.randn(1, 1, 20).expand(10, 1, 20)
+        noise = torch.cat([noise, tmp], 0)
+    noise = V(noise.cuda())
+    cond = [torch.arange(10)] * 10
+    cond = V(torch.cat(cond, 0).cuda())
+
+    sample = model.decoder(noise, cond).cpu()
+
+    save_image(sample.data, 'output.jpg', nrow=10)
+
+if __name__ == '__main__':
+    train_loader = torch.utils.data.DataLoader(
+            datasets.MNIST(MNIST_PATH, train=True, download=MNIST_DOWNLOAD
+                        , transform=transforms.ToTensor()),
+            batch_size=TRAIN_DATA_BATCH_SIZE,
+            shuffle=True, num_workers=4, 
+            )
+    test_loader = torch.utils.data.DataLoader(
+            datasets.MNIST(MNIST_PATH, train=False, download=MNIST_DOWNLOAD
+                        , transform=transforms.ToTensor()),
+            batch_size=100,
+            shuffle=True, num_workers=4, 
+            )
+
+    cudnn.benchmark = True
+
+    if MODE == 'load':
+        load_model()
+    else:
+        save_model()
